@@ -1,0 +1,441 @@
+<?xml version="1.0" encoding="US-ASCII"?>
+<!DOCTYPE rfc SYSTEM "rfc2629.dtd">
+<?rfc toc="yes"?>
+<?rfc tocompact="yes"?>
+<?rfc tocdepth="3"?>
+<?rfc tocindent="yes"?>
+<?rfc symrefs="yes"?>
+<?rfc sortrefs="yes"?>
+<?rfc comments="yes"?>
+<?rfc inline="yes"?>
+<?rfc compact="yes"?>
+<?rfc subcompact="no"?>
+<rfc category="exp" docName="matkins-batchhttp-00" ipr="none">
+  <front>
+    <title abbrev="BatchHTTP">Batch HTTP Requests (Draft)</title>
+
+    <author fullname="Martin Atkins" initials="M." surname="Atkins">
+      <organization>Six Apart Ltd.</organization>
+    </author>
+
+    <date />
+
+    <abstract>
+      <t>This specification on Batch HTTP Requests defines a mechanism for
+      making several atomic HTTP requests in a single HTTP request by
+      submitting the set of requests to a batch processor as a MIME
+      message.</t>
+    </abstract>
+
+    <note title="Requirements Language">
+      <t>The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+      "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this
+      document are to be interpreted as described in <xref
+      target="RFC2119">RFC 2119</xref>.</t>
+    </note>
+  </front>
+
+  <middle>
+    <section title="Introduction">
+      <t>In situations where HTTP is used as the transport layer for
+      inter-application communication, there is often contention between the
+      desire to maintain HTTP's semantics of atomic, standalone requests and
+      the inevitable overhead that results from performing multiple, similar
+      operations.</t>
+
+      <t>This specification defines a mechanism to allow several atomic HTTP
+      requests to be submitted together to an intermediate batch processor for
+      simultaneous processing. The batch processor will execute the submitted
+      requests and return a single response containing the results for all
+      requests.</t>
+
+      <t>The semantics are similar to pipelined requests to an HTTP proxy, but
+      with the following additional advantages:<list style="symbols">
+          <t>There is no requirement that responses are returned in the same
+          order as requests, allowing the responses to simple requests to be
+          returned as soon as they are complete without waiting for
+          longer-lived requests that were submitted first to complete.</t>
+
+          <t>The requests are presented together in a single HTTP
+          "super-request" to the batch processor, which allows the batch
+          processor to apply optimizations to the submitted batch job before
+          executing it, transparently to the client.</t>
+        </list></t>
+
+      <t>From the client's perspective, a batch request is semantically and
+      functionally equivalent to multiple parallel requests via a single HTTP
+      proxy, but requires only a single TCP connection until the request
+      reaches the batch processor.</t>
+
+      <t>This specification specifically does not provide facilities for
+      requesting multiple requests to be handled atomically or for any
+      particular sequencing of request processing. Requests are processed in
+      an implementation-defined and possibly-unpredictable order and it is the
+      client's responsibility to ensure that it does not submit multiple
+      conflicting requests in the same job.</t>
+
+      <t>The protocol described in this specification is defined such that the
+      batch processor may be a proxy-like component independent of the
+      underlying services it provides access to, though some implementations
+      may choose to implement a tighter coupling between the batch processor
+      and the underlying services in order to facilitate request optimizations
+      or for other reasons.</t>
+
+      <section title="Notational Conventions">
+        <t>This specification uses the term "HTTP URI" to refer to URIs with
+        the scheme <spanx style="verb">http</spanx> as well as any other
+        schemes that are semantically compatible with <spanx style="verb">http</spanx>
+        at the application level such as <spanx style="verb">https</spanx>.</t>
+
+        <t>This specification considers HTTP messages that contain other HTTP
+        messages, and uses the term <spanx style="emph">outermost request</spanx>
+        to describe the top-level request and <spanx style="emph">inner request</spanx>
+        to describe a request that is included within the outermost request.
+        Likewise the terms <spanx style="emph">outermost response</spanx> and
+        <spanx style="emph">inner response</spanx> are used for the equivalent
+        components of a batch response.</t>
+      </section>
+    </section>
+
+    <section title="The Batch Processor">
+      <t>The batch processor is a resource to which clients can submit batch
+      jobs for processing. An batch processor is made available at a
+      particular HTTP URI. A batch processor is similar to a proxy server as
+      defined in <xref target="RFC2616"></xref> in that it forwards incoming
+      requests on to another service for processing, though the protocol used
+      to submit requests to the batch processor is different to a traditional
+      HTTP proxy and is defined in <xref target="submitjob"></xref>.</t>
+    </section>
+
+    <section anchor="submitjob" title="Submitting a Batch Job">
+      <t>A client submits a batch job to the batch processor by sending a
+      <spanx style="verb">POST</spanx> request (the outermost request) to the
+      batch processor's URI. The outermost request MUST be of Content-type
+      <spanx style="verb">multipart/parallel</spanx>, with an appropriate
+      boundary specified and the request entity body formatted as defined in
+      <xref target="RFC1521"></xref>.</t>
+
+      <t>Each part of the submitted multipart message SHOULD have a
+      Content-Type of <spanx style="verb">application/http-request</spanx>.
+      The meaning of message parts with other Content-Types is undefined by
+      this specification, but MAY be used by extensions to this specification
+      to communicate additional information about the batch request. If a
+      batch processor recieves a syntactically-valid multipart message with a
+      part that has an media type other than <spanx style="verb">application/http-request</spanx>
+      for which it has no special support, the batch processor MUST respond
+      with a 422 Unprocessable Entity error, as defined by <xref
+      target="RFC4918"></xref>, for the outermost response.</t>
+
+      <t>Each part of the submitted multipart message that is of type <spanx
+      style="verb">application/http-request</spanx> MUST include a <spanx
+      style="verb">Multipart-Request-ID</spanx> header field whose value is a
+      client-provided opaque string of octets (except where the string would
+      cause the message to violate MIME syntax) that is used to identify the
+      request and its corresponding response.</t>
+
+      <t>Each part of the submitted multipart message that is of type <spanx
+      style="verb">application/http-request</spanx> MUST have as its body an
+      octet stream representing a fully-qualified and valid HTTP Request
+      message as would be valid to submit to a standard HTTP proxy server. The
+      batch processor MUST process this request consistent with the
+      requirements for proxy servers as described in <xref
+      target="RFC2616"></xref>.</t>
+
+      <t>A client SHOULD NOT submit mutually-conflicting requests in a single
+      batch job. If a client does so, the results are undefined. For example,
+      a client should not submit a GET request and a DELETE request for the
+      same resource in a single batch job, since it is not defined whether the
+      GET or the DELETE request will be processed first.</t>
+    </section>
+
+    <section title="Processing a Batch Job">
+      <t>When the batch processor recieves a batch job, it SHALL parse the
+      submitted multipart message body to identify the individual inner
+      requests. The batch processor SHALL then process the inner requests.</t>
+
+      <t>The batch processor may process the inner requests in any order and
+      may choose to process some or all requests in parallel. The batch
+      processor may also use knowledge of underlying services to perform
+      optimizations of the batch job, so that for example several atomic GET
+      requests are reduced to a single request to retrieve multiple items.</t>
+
+      <t>However, the batch processor MUST present separate results for each
+      inner request in its response, and MUST preserve the expected semantics
+      of the atomic requests and their corresponding responses.</t>
+
+      <t>The batch processor MAY impose restrictions on what requests it will
+      perform on behalf of a client, such as making requests only to HTTP URIs
+      within as specific domain. In this case, the batch processor SHOULD
+      return in the inner response corresponding to any rejected inner request
+      an error response consistent with the requirements for proxy servers as
+      defined in <xref target="RFC2616"></xref>.</t>
+
+      <t>The batch processor MAY impose restrictions on what requests may be
+      combined together in a single batch job. For example, the batch
+      processor may impose a limit on the number of inner requests in a batch
+      job or require that all inner requests contain Authorization headers
+      that correspond to the same principal. When such constraints are
+      violated, the batch processor MUST return an appropriate error for the
+      outermost response, since it is the overall batch job that is in error
+      in this case.</t>
+
+      <t>If the batch processor is handling an innner request by connecting to
+      an external service over the network and there is a network-level
+      (rather than HTTP-level) error, the 502 Bad Gateway error response code
+      SHOULD be returned for the corresponding inner response.</t>
+    </section>
+
+    <section title="Returning a Response">
+      <t>If the batch processor considers the overall batch job to be legal
+      and processes the inner responses, it MUST return 207 Multi-status, as
+      defined in <xref target="RFC4918"></xref>, for the outermost
+      response.</t>
+
+      <t>The outermost response MUST be of Content-type <spanx style="verb">multipart/parallel</spanx>,
+      with an appropriate boundary specified and the request entity body
+      formatted as defined in <xref target="RFC1521"></xref>.</t>
+
+      <t>Each part of the submitted multipart message SHOULD have a
+      Content-Type of <spanx style="verb">application/http-response</spanx>.
+      The meaning of message parts with other Content-Types is undefined by
+      this specification, but MAY be used by extensions to this specification
+      to communicate additional information about the batch request. If a
+      batch processor returns a syntactically-valid multipart message with a
+      part that has an media type other than <spanx style="verb">application/http-response</spanx>
+      for which it the client has no special support, the client MUST consider
+      the response to be invalid and return an error. A batch processor MUST
+      NOT return extension parts in the response unless a corresponding
+      extension part is included in the submitted batch job, as defined by an
+      extension specification.</t>
+
+      <t>Each part of the returned multipart message that is of type <spanx
+      style="verb">application/http-response</spanx> MUST include a <spanx
+      style="verb">Multipart-Request-ID</spanx> header field whose value is
+      the client-provided opaque string of octets that was used to identify
+      the corresponding inner request in the submitted batch job. The batch
+      processor MUST include exactly one inner response corresponding to every
+      inner request in the submitted batch job.</t>
+
+      <t>Each part of the returned multipart message that is of type <spanx
+      style="verb">application/http-response</spanx> MUST have as its body an
+      octet stream representing a fully-qualified and valid HTTP Response
+      message as could be returned by a standard HTTP proxy server. The client
+      MUST process this request consistent with the requirements for responses
+      from proxy servers as described in <xref target="RFC2616"></xref>.</t>
+    </section>
+
+    <section title="Authorization for Batch Requests">
+      <t>The inner requests in a batch job MAY each contain their own
+      Authorization header field that provide the credentials for that
+      particular inner request. Additionally, the outermost request MAY
+      contain its own Authorization header field which provide credentials for
+      the batch processor itself. These credentials are all distinct and are
+      to be processed separately.</t>
+
+      <t>An Authorization header field on the outermost request is
+      functionally and semantically equivalent to a Proxy-Authorization header
+      field on a request to a standard proxy server. To generic HTTP
+      implementations the batch processor is not considered to be a proxy
+      server as defined by HTTP and so Proxy-Authorization MUST NOT be used to
+      provide credentials to the batch processor.</t>
+
+      <t>The batch processor MAY return 401 Unauthorized along with
+      WWW-Authenticate header field(s) in response to a request to create a
+      batch job if the batch processor service is only available to
+      authenticated clients. If any inner requests themselves result in a 401
+      Unauthorized response, this MUST be returned in the corresponding inner
+      response and NOT in the outermost response.</t>
+
+      <t>Proxy-Authorization and Proxy-Authenticate header fields MUST NOT be
+      used in inner requests or responses.</t>
+    </section>
+
+    <section title="Interaction with HTTP Features">
+      <t>The batch processor can be considered to have two functional parts:
+      the frontend is the endpoint that recieves incoming batch requests,
+      while the backend actually carries out the requests, possibly by
+      contacting other servers via HTTP.</t>
+
+      <t>The frontend is provided on an origin server as defined by <xref
+      target="RFC2616"></xref>. A request from a client to the batch processor
+      frontend MAY be sent via standard HTTP proxy servers, which will
+      consider only the outermost request; the batch request body is opaque to
+      intermediate proxies. The client, however, must consider the batch
+      processor to be functionally and semantically equivalent to a standard
+      HTTP proxy server as regards the content of submitted inner requests and
+      the processing of recieved inner responses.</t>
+
+      <t>When the batch processor contacts another server via HTTP in order to
+      satisfy a request, the backend is equivalent to the backend of a
+      standard HTTP proxy, acting as an HTTP client which contacts other
+      origin servers. The backend client MAY contact other origin servers
+      through intermediate proxies. The batch processor backend MUST act
+      consistently with the requirements for the backend of a standard HTTP
+      proxy server. In particular, the batch processor MUST use the Via header
+      field in both requests to other servers and in inner responses as
+      defined in <xref target="RFC2616"></xref>.</t>
+
+      <t>The batch processor MAY provide caching services in a manner
+      consistent with the requirements for standard HTTP caching proxy
+      servers.</t>
+
+      <t>The request header for the outermost request contains headers
+      intended to be processed directly by the batch processor. The request
+      headers of the inner requests contain headers intended to be forwarded
+      on when processing the inner request. Where the HTTP specification
+      defines header fields to be processed directly by intermediate proxies
+      rather than forwarded on, these header fields MUST be processed
+      consistent with the requirements for proxy servers in <xref
+      target="RFC2616"></xref>. This includes, but is not limited to, correct
+      handling of Max-Forwards header field and the cache-related header
+      fields.</t>
+    </section>
+
+    <section title="Nested Batch Jobs">
+      <t>This specification does not define any specific mechanism for nesting
+      batch jobs within other batch jobs. However, since the batch job submit
+      request is itself an HTTP request, it is valid to include in a batch job
+      an inner request that is itself a batch job submit request. Since a
+      batch processor is allowed to impose arbitrary restrictions on what
+      inner requests and combinations of inner requests it will allow, the
+      batch processor MAY reject inner requests that reference itself
+      recursively.</t>
+
+      <t>A batch processor MAY also attempt to collapse nested batch jobs into
+      a single, flat batch job. However, in doing so it MUST preserve the
+      semantics of the nested batch job submit request, including checking
+      that request's Authorization header if appropriate.</t>
+
+      <t>Clients SHOULD NOT submit batch jobs that contain inner requests that
+      themselves submit batch jobs to the same batch processor. However,
+      clients MAY submit batch jobs that contain inner requests that submit
+      batch jobs to other batch processors. The outermost batch processor MUST
+      NOT attempt to handle a nested batch request that is not addressed to it
+      and MUST submit it as normal to the target batch processor unless the
+      outermost batch processor's policy prohibits doing so.</t>
+    </section>
+
+    <section anchor="IANA" title="IANA Considerations">
+      <t>This specification defines the following MIME media types for use in
+      batch messages.</t>
+
+      <section title="application/http-request">
+        <t><list style="hanging">
+            <t hangText="MIME media type name">application</t>
+
+            <t hangText="MIME subtype name">http-request</t>
+
+            <t hangText="Mandatory Parameters">none.</t>
+
+            <t hangText="Optional Parameters">none.</t>
+
+            <t hangText="Encoding Considerations">After handling any applied
+            transfer-encoding, the body of an application/http-request entity
+            is to be interpreted as a raw octet stream at the MIME message
+            level, and passed as such to an HTTP Request parser as defined in
+            <xref target="RFC2616"></xref> section 5.</t>
+
+            <t hangText="Security Considerations">As defined in this
+            specification.</t>
+
+            <t hangText="Interoperability Considerations">There are no known
+            interoperability issues.</t>
+
+            <t hangText="Published Specification">This specification.</t>
+
+            <t hangText="Applications that use this media type">No known
+            applications currently use this media type.</t>
+          </list></t>
+      </section>
+
+      <section title="application/http-response">
+        <t><list style="hanging">
+            <t hangText="MIME media type name">application</t>
+
+            <t hangText="MIME subtype name">http-response</t>
+
+            <t hangText="Mandatory Parameters">none.</t>
+
+            <t hangText="Optional Parameters">none.</t>
+
+            <t hangText="Encoding Considerations">After handling any applied
+            transfer-encoding, the body of an application/http-response entity
+            is to be interpreted as a raw octet stream at the MIME message
+            level, and passed as such to an HTTP Response parser as defined in
+            <xref target="RFC2616"></xref> section 6.</t>
+
+            <t hangText="Security Considerations">As defined in this
+            specification.</t>
+
+            <t hangText="Interoperability Considerations">There are no known
+            interoperability issues.</t>
+
+            <t hangText="Published Specification">This specification.</t>
+
+            <t hangText="Applications that use this media type">No known
+            applications currently use this media type.</t>
+          </list></t>
+      </section>
+    </section>
+
+    <section anchor="security" title="Security Considerations">
+      <t>TBD</t>
+    </section>
+  </middle>
+
+  <back>
+    <references title="Normative References">
+      <reference anchor="RFC2616">
+        <front>
+          <title>Hypertext Transfer Protocol -- HTTP/1.1</title>
+
+          <author fullname="Roy T. Fielding" initials="R." surname="Fielding">
+            <organization>University of California, Irvine</organization>
+          </author>
+
+          <date month="June" year="1999" />
+        </front>
+      </reference>
+
+      <reference anchor="RFC2119">
+        <front>
+          <title></title>
+
+          <author>
+            <organization></organization>
+          </author>
+
+          <date />
+        </front>
+      </reference>
+
+      <reference anchor="RFC1521">
+        <front>
+          <title>MIME (Multipurpose Internet Mail Extensions) Part One:
+          Mechanisms for Specifying and Describing the Format of Internet
+          Message Bodies</title>
+
+          <author fullname="Nathaniel S. Borenstein" initials="N."
+                  surname="Borenstein">
+            <organization></organization>
+          </author>
+
+          <date month="September" year="1993" />
+        </front>
+      </reference>
+
+      <reference anchor="RFC4918">
+        <front>
+          <title>HTTP Extensions for Web Distributed Authoring and Versioning
+          (WebDAV)</title>
+
+          <author fullname="Lisa Dusseault" initials="L." surname="Dusseault">
+            <organization></organization>
+          </author>
+
+          <date month="June" year="2007" />
+        </front>
+      </reference>
+    </references>
+  </back>
+</rfc>
