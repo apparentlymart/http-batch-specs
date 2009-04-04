@@ -222,6 +222,15 @@
       message as could be returned by a standard HTTP proxy server. The client
       MUST process this request consistent with the requirements for responses
       from proxy servers as described in <xref target="RFC2616"></xref>.</t>
+
+      <t>The batch processor MAY return the inner responses in any order. In
+      particular, a batch processor capable of streaming MAY return individual
+      responses as they are completed rather than waiting until the entire
+      batch job has completed, allowing a client capable of streaming to
+      process individual responses as soon as possible. The client MUST use
+      the <spanx style="verb">Multipart-Request-ID</spanx> header field on
+      each inner response to match the response to the corresponding inner
+      request in the batch job.</t>
     </section>
 
     <section title="Authorization for Batch Requests">
